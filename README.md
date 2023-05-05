@@ -16,4 +16,4 @@ Documentation is here: https://autonlab.org/auton-survival/
 
 Benchmarking on Largest cardio-vascular trials:
 
-  Baseline Models = {DSM, DCM, CoxPH, AFT, RSF} on `ACCORD`
+  Baseline Models = {DSM, DCM, CoxPH, RSF} on `ACCORD`
