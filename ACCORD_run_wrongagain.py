@@ -1,0 +1,667 @@
+import os
+import sys
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+#sys.path.append('./')
+#sys.path.append('/Users/yushiqiu/Documents/surv-rcts')
+#dataset = os.system('python3 /Users/yushiqiu/Documents/surv-rcts/dev/dev_dataset.py')
+from sklearn import metrics
+import dev.dev_dataset as dev
+from lifelines import KaplanMeierFitter
+from sksurv.metrics import concordance_index_ipcw, brier_score, cumulative_dynamic_auc
+dataset=dev.dataset
+
+
+def eval_train_test(best_model,x_train,x_val,outcomes_train,outcomes_val,times):
+    #calculate train evaluation
+
+    out_survival_train = predict_survival_multi(best_model, x_train, times)
+    out_risk_train = 1-out_survival_train
+    print('Train Evaluation')
+    evaluate(out_survival_train, out_risk_train, outcomes_train, outcomes_train, times)
+
+    #calculate validation evaluation
+    out_survival_val = predict_survival_multi(best_model, x_val, times)
+    out_risk_val = 1-out_survival_val
+    print('Validation Evaluation')
+    evaluate(out_survival_val, out_risk_val, outcomes_train, outcomes_val, times)
+
+
+
+
+a = dataset._interventions
+b = a['Main Study']
+index_control = b.loc[b == dataset.control_arm].index
+index_treatment = b.loc[b == dataset.treatment_arm].index
+control_covariate = dataset.covariates.loc[index_control]
+treatment_covariate = dataset.covariates.loc[index_treatment]
+from auton_survival.preprocessing import Preprocessor
+features_control = Preprocessor().fit_transform(control_covariate, cat_feats=dataset.cat_features, num_feats=dataset.num_features)
+features_treatment = Preprocessor().fit_transform(treatment_covariate, cat_feats=dataset.cat_features, num_feats=dataset.num_features)
+outcomes_control = dataset.outcomes.loc[index_control]
+outcomes_treatment = dataset.outcomes.loc[index_treatment]
+
+import numpy as np
+# horizons = [0.25, 0.5, 0.75]
+# times = np.quantile(dataset.outcomes.time[dataset.outcomes.event==1], horizons).tolist()
+# times_treatment = np.quantile(outcomes_treatment.time[outcomes_treatment.event==1], horizons).tolist()
+times = [365,730.0,1825.0]
+x_control, t_control, e_control = features_control, outcomes_control.time, outcomes_control.event
+
+index_0 = outcomes_control.loc[outcomes_control['event'] == 0].index
+index_1 = outcomes_control.loc[outcomes_control['event'] == 1].index
+
+x_control_0, x_control_1 = features_control.loc[index_0], features_control.loc[index_1]
+t_control_0, t_control_1 = outcomes_control.time.loc[index_0], outcomes_control.time.loc[index_1]
+e_control_0, e_control_1 = outcomes_control.event.loc[index_0], outcomes_control.event.loc[index_1]
+assert len(x_control_0) == len(t_control_0) == len(e_control_0)
+
+n_0 = len(x_control_0)
+n_1 = len(x_control_1)
+
+tr_size_0 = int(n_0*0.50)
+vl_size_0 = int(n_0*0.25)
+te_size_0 = int(n_0*0.25)
+
+permutation = np.random.permutation(n_0)
+x_control_0 = x_control_0.iloc[permutation]
+t_control_0 = t_control_0.iloc[permutation]
+e_control_0 = e_control_0.iloc[permutation]
+
+if any(x_control_0.index.duplicated()):
+    print("x_control_0 duplicated")
+if any(t_control_0.index.duplicated()):
+    print("t_control_0 duplicated")
+if any(e_control_0.index.duplicated()):
+    print("e_control_0 duplicated")
+
+
+
+x_train_control_0, x_test_control_0, x_val_control_0 = x_control_0.iloc[:tr_size_0], x_control_0.iloc[-te_size_0:], x_control_0.iloc[tr_size_0:(-te_size_0)]
+t_train_control_0, t_test_control_0, t_val_control_0 = t_control_0.iloc[:tr_size_0], t_control_0.iloc[-te_size_0:], t_control_0.iloc[tr_size_0:(-te_size_0)]
+e_train_control_0, e_test_control_0, e_val_control_0 = e_control_0.iloc[:tr_size_0], e_control_0.iloc[-te_size_0:], e_control_0.iloc[tr_size_0:(-te_size_0)]
+
+if len(x_train_control_0)+len(x_test_control_0)+len(x_val_control_0) != n_0:
+    print("x_train_control_0 length not right")
+
+
+tr_size_1 = int(n_1*0.50)
+vl_size_1 = int(n_1*0.25)
+te_size_1 = int(n_1*0.25)
+
+permutation = np.random.permutation(n_1)
+x_control_1 = x_control_1.iloc[permutation]
+t_control_1 = t_control_1.iloc[permutation]
+e_control_1 = e_control_1.iloc[permutation]
+
+if any(x_control_1.index.duplicated()):
+    print("x_control_1 duplicated")
+if any(t_control_1.index.duplicated()):
+    print("t_control_1 duplicated")
+if any(e_control_1.index.duplicated()):
+    print("e_control_1 duplicated")
+
+
+x_train_control_1, x_test_control_1, x_val_control_1 = x_control_1.iloc[:tr_size_1], x_control_1.iloc[-te_size_1:], x_control_1.iloc[tr_size_1:(-te_size_1)]
+t_train_control_1, t_test_control_1, t_val_control_1 = t_control_1.iloc[:tr_size_1], t_control_1.iloc[-te_size_1:], t_control_1.iloc[tr_size_1:(-te_size_1)]
+e_train_control_1, e_test_control_1, e_val_control_1 = e_control_1.iloc[:tr_size_1], e_control_1.iloc[-te_size_1:], e_control_1.iloc[tr_size_1:(-te_size_1)]
+
+if len(x_train_control_1)+len(x_test_control_1)+len(x_val_control_1) != n_1:
+    print("x_train_control_1 length not right")
+
+x_train_control = pd.concat((x_train_control_0, x_train_control_1), axis=0)
+x_test_control = pd.concat((x_test_control_0, x_test_control_1), axis=0)
+x_val_control = pd.concat((x_val_control_0, x_val_control_1), axis=0)
+
+t_train_control = pd.concat((t_train_control_0, t_train_control_1), axis=0)
+t_test_control = pd.concat((t_test_control_0, t_test_control_1), axis=0)
+t_val_control = pd.concat((t_val_control_0, t_val_control_1), axis=0)
+
+e_train_control = pd.concat((e_train_control_0, e_train_control_1), axis=0)
+e_test_control = pd.concat((e_test_control_0, e_test_control_1), axis=0)
+e_val_control = pd.concat((e_val_control_0, e_val_control_1), axis=0)
+
+# x_treatment, t_treatment, e_treatment = features_treatment.values, outcomes_treatment.time.values, outcomes_treatment.event.values
+
+index_0 = outcomes_treatment.loc[outcomes_treatment['event'] == 0].index
+index_1 = outcomes_treatment.loc[outcomes_treatment['event'] == 1].index
+
+x_treatment_0, x_treatment_1 = features_treatment.loc[index_0], features_treatment.loc[index_1]
+t_treatment_0, t_treatment_1 = outcomes_treatment.time.loc[index_0], outcomes_treatment.time.loc[index_1]
+e_treatment_0, e_treatment_1 = outcomes_treatment.event.loc[index_0], outcomes_treatment.event.loc[index_1]
+assert len(x_treatment_0) == len(t_treatment_0) == len(e_treatment_0)
+
+
+n_0 = len(x_treatment_0)
+n_1 = len(x_treatment_1)
+
+tr_size_0 = int(n_0*0.50)
+vl_size_0 = int(n_0*0.25)
+te_size_0 = int(n_0*0.25)
+
+permutation = np.random.permutation(n_0)
+x_treatment_0 = x_treatment_0.iloc[permutation]
+t_treatment_0 = t_treatment_0.iloc[permutation]
+e_treatment_0 = e_treatment_0.iloc[permutation]
+
+if any(x_treatment_0.index.duplicated()):
+    print("x_treatment_0 duplicated")
+if any(t_treatment_0.index.duplicated()):
+    print("t_treatment_0 duplicated")
+if any(e_treatment_0.index.duplicated()):
+    print("e_treatment_0 duplicated")
+
+
+x_train_treatment_0, x_test_treatment_0, x_val_treatment_0 = x_treatment_0.iloc[:tr_size_0], x_treatment_0.iloc[-te_size_0:], x_treatment_0.iloc[tr_size_0:(-te_size_0)]
+t_train_treatment_0, t_test_treatment_0, t_val_treatment_0 = t_treatment_0.iloc[:tr_size_0], t_treatment_0.iloc[-te_size_0:], t_treatment_0.iloc[tr_size_0:(-te_size_0)]
+e_train_treatment_0, e_test_treatment_0, e_val_treatment_0 = e_treatment_0.iloc[:tr_size_0], e_treatment_0.iloc[-te_size_0:], e_treatment_0.iloc[tr_size_0:(-te_size_0)]
+print(x_train_treatment_0)
+print(x_test_treatment_0)
+print(x_val_treatment_0)
+
+
+if len(x_train_treatment_0)+len(x_test_treatment_0)+len(x_val_treatment_0) != n_0:
+    print("x_train_treatment_0 length not right")
+
+tr_size_1 = int(n_1*0.50)
+vl_size_1 = int(n_1*0.25)
+te_size_1 = int(n_1*0.25)
+
+permutation = np.random.permutation(n_1)
+x_treatment_1 = x_treatment_1.iloc[permutation]
+t_treatment_1 = t_treatment_1.iloc[permutation]
+e_treatment_1 = e_treatment_1.iloc[permutation]
+
+if any(x_treatment_1.index.duplicated()):
+    print("x_treatment_1 duplicated")
+if any(t_treatment_1.index.duplicated()):
+    print("t_treatment_1 duplicated")
+if any(e_treatment_1.index.duplicated()):
+    print("e_treatment_1 duplicated")
+
+
+
+x_train_treatment_1, x_test_treatment_1, x_val_treatment_1 = x_treatment_1.iloc[:tr_size_1], x_treatment_1.iloc[-te_size_1:], x_treatment_1.iloc[tr_size_1:(-te_size_1)]
+t_train_treatment_1, t_test_treatment_1, t_val_treatment_1 = t_treatment_1.iloc[:tr_size_1], t_treatment_1.iloc[-te_size_1:], t_treatment_1.iloc[tr_size_1:(-te_size_1)]
+e_train_treatment_1, e_test_treatment_1, e_val_treatment_1 = e_treatment_1.iloc[:tr_size_1], e_treatment_1.iloc[-te_size_1:], e_treatment_1.iloc[tr_size_1:(-te_size_1)]
+
+if len(x_train_treatment_1)+len(x_test_treatment_1)+len(x_val_treatment_1) != n_1:
+    print("x_train_treatment_1 length not right")
+
+x_train_treatment = pd.concat((x_train_treatment_0, x_train_treatment_1), axis=0)
+x_test_treatment = pd.concat((x_test_treatment_0, x_test_treatment_1), axis=0)
+x_val_treatment = pd.concat((x_val_treatment_0, x_val_treatment_1), axis=0)
+
+t_train_treatment = pd.concat((t_train_treatment_0, t_train_treatment_1), axis=0)
+t_test_treatment = pd.concat((t_test_treatment_0, t_test_treatment_1), axis=0)
+t_val_treatment = pd.concat((t_val_treatment_0, t_val_treatment_1), axis=0)
+
+e_train_treatment = pd.concat((e_train_treatment_0, e_train_treatment_1), axis=0)
+e_test_treatment = pd.concat((e_test_treatment_0, e_test_treatment_1), axis=0)
+e_val_treatment = pd.concat((e_val_treatment_0, e_val_treatment_1), axis=0)
+
+
+x_train = pd.concat((x_train_control, x_train_treatment), axis=0)
+x_test = pd.concat((x_test_control, x_test_treatment), axis=0)
+x_val = pd.concat((x_val_control, x_val_treatment), axis=0)
+
+t_train = pd.concat((t_train_control, t_train_treatment), axis=0)
+t_test = pd.concat((t_test_control, t_test_treatment), axis=0)
+t_val = pd.concat((t_val_control, t_val_treatment), axis=0)
+
+e_train = pd.concat((e_train_control, e_train_treatment), axis=0)
+e_test = pd.concat((e_test_control, e_test_treatment), axis=0)
+e_val = pd.concat((e_val_control, e_val_treatment), axis=0)
+assert len(x_train) == len(t_train) == len(e_train)
+
+if any(x_train.index.duplicated()):
+    print("x_train duplicated")
+if any(t_train.index.duplicated()):
+    print("t_train duplicated")
+if any(e_train.index.duplicated()):
+    print("e_train duplicated")
+
+if any(x_test.index.duplicated()):
+    print("x_test duplicated")
+if any(t_test.index.duplicated()):
+    print("t_test duplicated")
+if any(e_test.index.duplicated()):
+    print("e_test duplicated")
+
+if any(x_val.index.duplicated()):
+    print("x_val duplicated")
+if any(t_val.index.duplicated()):
+    print("t_test duplicated")
+if any(e_val.index.duplicated()):
+    print("e_test duplicated")
+
+
+
+
+## outcomes_test will comes with the same mixing protion for both treat and ctrl
+# x_train_df = pd.concat((x_train_control, x_train_treatment), axis=0)
+# x_test_df = pd.concat((x_test_control, x_test_treatment), axis=0)
+# x_val_df = pd.concat((x_val_control, x_val_treatment), axis=0)
+
+outcomes_train = pd.concat((t_train, e_train),axis=1)
+outcomes_test = pd.concat((t_test, e_test),axis=1)
+outcomes_val = pd.concat((t_val, e_val),axis=1)
+
+# outcomes_train = np.concatenate((e_train.reshape(len(e_train), 1), t_train.reshape(len(t_train),1)), axis=1)
+# outcomes_train = pd.DataFrame(outcomes_train, columns=['event', 'time'])
+#
+# outcomes_test = np.concatenate((e_test.reshape(len(e_test), 1), t_test.reshape(len(t_test),1)), axis=1)
+# outcomes_test = pd.DataFrame(outcomes_test, columns=['event', 'time'])
+#
+# outcomes_val = np.concatenate((e_val.reshape(len(e_val), 1), t_val.reshape(len(t_val),1)), axis=1)
+# outcomes_val = pd.DataFrame(outcomes_val, columns=['event', 'time'])
+
+
+from sklearn.model_selection import ParameterGrid
+param_grid = {
+             'k' : [3, 4,6],
+             #'k' : [3],
+              'distribution' : ['LogNormal','Weibull'],
+              'learning_rate' : [1e-4,1e-3],
+              'layers' : [ [], [50],[50,50]],
+              'elbo':[True,False]
+             }
+params = ParameterGrid(param_grid)
+from auton_survival.models.dsm import DeepSurvivalMachines
+from auton_survival.metrics import survival_regression_metric
+
+
+def select_models(index_list,models):
+    selected_models = []
+    for i in range(3):
+        selected_models.append(models[index_list[i]])
+        
+    return selected_models
+
+def eval_brier(predictions,outcomes_train,outcomes_test,horizons):
+    from auton_survival.metrics import survival_regression_metric
+    from sklearn.metrics import roc_auc_score, brier_score_loss
+    from sksurv import metrics
+    from sksurv.util import Surv
+    from tabulate import tabulate
+  
+
+    test_censored_brs = []
+
+    censoring_outcomes = outcomes_train.copy()
+
+    censoring_outcomes.event = 1 - censoring_outcomes.event
+
+    censoring_distribution = KaplanMeierFitter().fit(censoring_outcomes.time,
+                                                     censoring_outcomes.event)
+   
+
+
+    for i, horizon in enumerate(horizons):
+
+        y_pos = outcomes_test.time>=horizon
+        y_neg = (outcomes_test.time<horizon)&(outcomes_test.event)
+    
+        outcomes_uncensored = outcomes_test.loc[y_pos|y_neg]
+
+        y = np.zeros(len(outcomes_uncensored))
+
+        y[outcomes_uncensored.time>=horizon] = 1
+        y[outcomes_uncensored.time<horizon] = 0
+
+        weights = censoring_distribution.predict(outcomes_uncensored.time.values)
+        weights[outcomes_uncensored.time.values >= horizon] = censoring_distribution.predict(horizon)
+
+        weights = 1. / np.clip(weights, 1e-3, 1 - 1e-3)
+
+        test_censored_brs.append(brier_score_loss(y, predictions[:, i][y_pos | y_neg], sample_weight=weights))
+
+    # print(test_uncensored_brs, 'brier score at evaluating horizon')
+
+    return test_censored_brs
+
+models_DSM = []
+score_DSM = []
+
+for param in params:
+    model = DeepSurvivalMachines(k = param['k'],
+                                 distribution = param['distribution'],
+                                 layers = param['layers'])
+    # The fit method is called to train the model
+    model.fit(x_train.values, t_train.values, e_train.values, val_data= (x_val,t_val,e_val),iters = 200, learning_rate = param['learning_rate'],elbo=param['elbo'])
+#     ### using the val data to predict the survival function
+    temp_pred_DSM = model.predict_survival(x_val, times)
+
+    score_DSM.append(eval_brier(temp_pred_DSM, outcomes_train, outcomes_val, times))
+    models_DSM.append(model)
+# #     ### suppose there neet to return a list of two elements, the first one is the br score, the second one is the coresponing model
+# # print(score_DSM,len(models_DSM))
+dsm_to_csv = pd.DataFrame(score_DSM)
+file_path = "C:/Users/tiant/Documents/"
+dsm_to_csv.to_csv(file_path + '/dsm_to_csv.csv')
+# ####After getting the model,
+socre_DSM = np.array(score_DSM)
+
+best_model_index = np.argmin(score_DSM,axis=0)
+print(best_model_index, 'index')
+print(params[best_model_index[0]])
+print(params[best_model_index[1]])
+print(params[best_model_index[2]])
+
+print(best_model_index, 'index')
+best_models_DSM = select_models(best_model_index,models_DSM)
+
+
+## PREDICTION 
+## predict the survival function using different model
+def predict_survival_multi(models, x_test, times):
+    for i in range(len(models)):
+        
+        temp_score = models[i].predict_survival(x_test, times[i])
+        if i ==0:
+            pred = temp_score
+        
+        else:
+            pred = np.concatenate((pred,temp_score),axis=1)
+    pred = np.array(pred)
+    return pred
+def predict_risk_multi(models, x_test, times):
+    for i in range(len(models)):
+        temp_score = models[i].predict_risk(x_test, times[i])
+        if i ==0:
+            pred = temp_score
+        
+        else:
+            pred = np.concatenate((pred,temp_score),axis=1)
+    pred = np.array(pred)  
+            
+        
+    return pred
+
+
+out_risk = predict_risk_multi(best_models_DSM,x_test, times)
+out_survival = predict_survival_multi(best_models_DSM,x_test, times)
+
+### EVALUATION
+from sksurv.metrics import concordance_index_ipcw, brier_score, cumulative_dynamic_auc
+
+def evaluate(predictions,out_risk, outcomes_train, outcomes_test,horizons):
+
+    from auton_survival.metrics import survival_regression_metric
+    from sklearn.metrics import roc_auc_score, brier_score_loss,roc_curve,auc,RocCurveDisplay
+    from sksurv import metrics
+    from sksurv.util import Surv
+    from tabulate import tabulate
+  
+    test_uncensored_aucs = []
+    test_uncensored_brs = []
+    test_uncensored_cis = []
+    #test_censored_eces = []
+    test_censored_brs = []
+    test_censored_auc = []
+    test_censored_cis = []
+
+    from lifelines import KaplanMeierFitter
+
+    censoring_outcomes = outcomes_train.copy()
+   
+    censoring_outcomes.event = 1-censoring_outcomes.event
+  
+    censoring_distribution = KaplanMeierFitter().fit(censoring_outcomes.time,
+                                                     censoring_outcomes.event)
+   
+    fprs = []
+    tprs = []
+    roc_aucs = []
+    for i, horizon in enumerate(horizons):
+
+        y_pos = outcomes_test.time>=horizon
+        y_neg = (outcomes_test.time<horizon)&(outcomes_test.event)
+    
+        outcomes_uncensored  = outcomes_test.loc[y_pos|y_neg]
+
+        y = np.zeros(len(outcomes_uncensored))
+
+        y[outcomes_uncensored.time>=horizon] = 1
+        y[outcomes_uncensored.time<horizon] = 0
+
+        test_uncensored_aucs.append(roc_auc_score(y, predictions[:, i][y_pos|y_neg]))
+        fpr, tpr, thresholds = roc_curve(y, predictions[:, i][y_pos|y_neg])
+        roc_auc = auc(fpr, tpr)
+        fprs.append(fpr)
+        tprs.append(tpr)
+        roc_aucs.append(roc_auc)
+        # roc_auc = metrics.auc(fpr, tpr)
+        # display = RocCurveDisplay(fpr=fpr, tpr=tpr, roc_auc=roc_auc,estimator_name = 'example estimator')
+        # display.plot()
+        # plt.show()
+
+
+        test_uncensored_brs.append(brier_score_loss(y, predictions[:, i][y_pos|y_neg]))
+        #test_censored_eces.append(expected_calibration_error(predictions[:, 1], outcomes_test, horizon))
+    
+        et_test_control_uncensored = np.array([(outcomes_uncensored.iloc[i, 1], outcomes_uncensored.iloc[i, 0]) for i in range(len(outcomes_uncensored))],
+                 dtype = [('e', bool), ('t', float)])
+    
+        et_train_control = np.array([(outcomes_train.iloc[i,1], outcomes_train.iloc[i,0]) for i in range(len(outcomes_train))],
+                 dtype = [('e', bool), ('t', float)])
+        
+        et_test_control_censored = np.array([(outcomes_test.iloc[i, 1], outcomes_test.iloc[i, 0]) for i in range(len(outcomes_test))],
+                 dtype = [('e', bool), ('t', float)])
+
+
+        outcomes_uncensored  = outcomes_test.loc[y_pos|y_neg]
+        out_risk_uncensored = out_risk[y_pos|y_neg]
+
+        test_uncensored_cis.append(concordance_index_ipcw(et_train_control, et_test_control_uncensored, out_risk_uncensored[:,i], horizons[i])[0])
+
+        weights = np.ones(outcomes_uncensored.shape[0])
+        weights = censoring_distribution.predict(outcomes_uncensored.time.values)
+        weights[outcomes_uncensored.time.values>=horizon] = censoring_distribution.predict(horizon)
+
+        weights = 1./np.clip(weights, 1e-3, 1-1e-3)
+
+        test_censored_auc.append(roc_auc_score(y, predictions[:, i][y_pos|y_neg], sample_weight=weights))                
+        test_censored_brs.append(brier_score_loss(y, predictions[:, i][y_pos|y_neg], sample_weight=weights))
+        test_censored_cis.append(concordance_index_ipcw(et_train_control, et_test_control_censored,out_risk[:,i], horizons[i])[0])
+    from auton_survival.metrics import survival_regression_metric
+
+    #test_censored_brs = survival_regression_metric('brs', outcomes['test'], predictions['TEST'], horizons, outcomes['train'])
+    #test_censored_auc = survival_regression_metric('auc', outcomes['test'], predictions['TEST'], horizons, outcomes['train'])
+
+    to_print = []
+    to_print.append(["BR on Uncensored Data:"] + test_uncensored_brs)
+    to_print.append(["AUC on Uncensored Data:"] + test_uncensored_aucs)
+    to_print.append(["C-index on Uncensored Data:"] + test_uncensored_cis)
+
+    to_print.append(["Censoring Adjusted Brier Score:"] + list(test_censored_brs))
+    to_print.append(["Censoring Adjusted AUC:"] + list(test_censored_auc))
+    to_print.append(["Censoring Adjusted C-index:"] + list(test_censored_cis))
+
+    # to_print.append(['TRAIN FOLD PERFORMANCE'])
+    # train_censored_brs = metrics.brier_score(survival_train, survival_train, logistic(predictions['TRAIN']), horizons)[-1]
+    # train_censored_auc = metrics.cumulative_dynamic_auc(survival_train, survival_train, 1-logistic(predictions['TRAIN']), horizons)[0]
+    # to_print.append(["Censoring Adjusted Brier Score:"] + list(train_censored_brs))
+    # to_print.append(["Censoring Adjusted AUC:"] + list(train_censored_auc))
+
+    print(tabulate(to_print, headers=["METRIC"]+horizons))
+    return fprs, tprs,roc_aucs
+
+
+
+#when evaluating, pass the outcomes into evaluate()
+#pass both out_survival and out_risk
+## result
+
+print('DSM')
+eval_train_test(best_models_DSM,x_train,x_val,outcomes_train,outcomes_val,times)
+print('Test Evaluation')
+fpr_dsm, tpr_dsm,roc_auc_dsm = evaluate(out_survival,out_risk,outcomes_train, outcomes_test,times)
+################# DCM ###############################
+from auton_survival.models.dcm2 import DeepCoxMixtures
+from auton_survival.models.dcm2.dcm_utilities import *
+param_grid = {'k':[3,4,6], 'layers':[[],[50],[50,50]], 'gamma':[10],\
+              'smoothing_factor':[1e-4,1e-5], 'use_activation':[True,False],\
+               'random_seed':[0], 'optimizer':['SGD','Adam','RMSProp'],
+             }
+params = ParameterGrid(param_grid)
+models_DCM =[]
+score_DCM =[]
+for param in params:
+    model = DeepCoxMixtures(k = param['k'],layers=param['layers'],gamma = param['gamma'],smoothing_factor= param['smoothing_factor'],\
+                            use_activation=param['use_activation'],random_seed=param['random_seed'])
+    model.fit(x_train.values, t_train.values, e_train.values, val_data=(x_val,t_val, e_val),\
+         iters = 100, learning_rate = 1e-4, batch_size=120,optimizer = param['optimizer'])
+    temp_pred_DCM = model.predict_survival(x_val, times)
+    score_DCM.append(eval_brier(temp_pred_DCM,outcomes_train,outcomes_val, times))
+    models_DCM.append(model)
+dcm_to_csv = pd.DataFrame(score_DCM)
+file_path = "C:/Users/tiant/Documents/"
+dcm_to_csv.to_csv(file_path + '/dcm_to_csv.csv')
+score_DCM =np.array(score_DCM)
+print(len(models_DCM))
+best_model_index = np.argmin(score_DCM,axis=0)
+print(best_model_index, 'index')
+print(params[best_model_index[0]])
+print(params[best_model_index[1]])
+print(params[best_model_index[2]])
+
+print(best_model_index, 'index')
+best_models_DCM = select_models(best_model_index,models_DCM)
+
+
+out_survival_dcm = predict_survival_multi(best_models_DCM,x_test, times)
+out_risk_dcm = 1-out_survival_dcm
+# print(out_risk_dcm,out_survival_dcm)
+
+print('DCM')
+eval_train_test(best_models_DCM,x_train,x_val,outcomes_train,outcomes_val,times)
+print('Test Evaluation')
+fpr_dcm, tpr_dcm,roc_auc_dcm = evaluate(out_survival_dcm,out_risk_dcm,outcomes_train, outcomes_test,times)
+
+
+# ################CPH#####################
+
+# x_control, y_control = features_control, outcomes_control
+#
+# n = len(x_control)
+#
+# tr_size = int(n*0.50)
+# vl_size = int(n*0.25)
+# te_size = int(n*0.25)
+#
+# x_train_control, x_test_control, x_val_control = x_control.iloc[:tr_size], x_control.iloc[-te_size:], x_control.iloc[tr_size:tr_size+vl_size]
+# y_train_control, y_test_control, y_val_control = y_control.iloc[:tr_size], y_control.iloc[-te_size:], y_control.iloc[tr_size:tr_size+vl_size]
+#
+# x_treatment, y_treatment = features_treatment, outcomes_treatment
+#
+# n = len(x_treatment)
+#
+# tr_size = int(n*0.50)
+# vl_size = int(n*0.25)
+# te_size = int(n*0.25)
+#
+# x_train_treatment, x_test_treatment, x_val_treatment = x_treatment.iloc[:tr_size], x_treatment.iloc[-te_size:], x_treatment.iloc[tr_size:tr_size+vl_size]
+# y_train_treatment, y_test_treatment, y_val_treatment = y_treatment.iloc[:tr_size], y_treatment.iloc[-te_size:], y_treatment.iloc[tr_size:tr_size+vl_size]
+#
+# x_train = pd.concat((x_train_control, x_train_treatment), axis=0)
+# x_test = pd.concat((x_test_control, x_test_treatment), axis=0)
+# x_val = pd.concat((x_val_control, x_val_treatment), axis=0)
+#
+# y_train = pd.concat((y_train_control, y_train_treatment), axis=0)
+# y_test = pd.concat((y_test_control, y_test_treatment), axis=0)
+# y_val = pd.concat((y_val_control, y_val_treatment), axis=0)
+
+param_grid_CPH = {'l2' : [1e-3, 1e-4]}
+params_CPH = ParameterGrid(param_grid_CPH)
+
+from auton_survival.estimators import SurvivalModel
+from auton_survival.metrics import survival_regression_metric
+
+models_cph = []
+score_cph = []
+for param in params_CPH:
+    model = SurvivalModel('cph', random_seed=2, l2=param['l2'])
+
+    # The fit method is called to train the model
+    model.fit(x_train,outcomes_train,val_data=(x_val,outcomes_val))
+
+    # Obtain survival probabilities for validation set and compute the Integrated Brier Score
+    predictions_val = model.predict_survival(x_val, times)
+
+    score_cph.append(eval_brier(predictions_val, outcomes_train,outcomes_val, times))
+    models_cph.append(model)
+# print(score_cph,len(models_cph))
+# print(score_cph)
+cph_to_csv = pd.DataFrame(score_cph)
+file_path = "C:/Users/tiant/Documents/"
+# cph_to_csv.to_csv(file_path + '/cph_to_csv.csv')
+score_cph = np.array(score_cph)
+# Select the best model based on the mean metric value computed for the validation set
+score_cph = np.argmin(score_cph,axis=0)
+print(best_model_index, 'index')
+print(params[score_cph[0]])
+print(params[score_cph[1]])
+print(params[score_cph[2]])
+
+# print(score_cph,'score')
+model_best_cph = select_models(score_cph,models_cph)
+print(score_cph,'index')
+out_risk_cph = predict_risk_multi(model_best_cph,x_test, times)
+out_survival_cph = 1-out_risk_cph
+
+print('CPH')
+eval_train_test(model_best_cph,x_train,x_val,outcomes_train,outcomes_val,times)
+print('Test Evaluation')
+fpr_cph, tpr_cph,roc_auc_cph = evaluate(
+    out_survival_cph,out_risk_cph,outcomes_train, outcomes_test,times)
+# ########################RSF!!!!!!!!!!!!!!!!!!!
+param_grid_RSF = {'n_estimators' : [100, 300],
+              'max_depth' : [5, 6],
+              'max_features' : ['sqrt', 'log2']}
+params_RSF = ParameterGrid(param_grid_RSF)
+models_RSF = []
+score_RSF = []
+for param in params_RSF:
+    model = SurvivalModel('rsf', random_seed=2, n_estimators=param['n_estimators'], max_depth=param['max_depth'], max_features=param['max_features'])
+    model.fit(x_train, outcomes_train,val_data=(x_val,outcomes_val))
+    predictions_val = model.predict_survival(x_val, times)
+    
+    score_RSF.append(eval_brier(predictions_val,outcomes_train,outcomes_val, times))
+    # print(predictions_val,'predictmval')
+    models_RSF.append(model)
+rsf_to_csv = pd.DataFrame(score_RSF)
+file_path = "C:/Users/tiant/Documents/"
+# rsf_to_csv.to_csv(file_path + '/rsf_to_csv.csv')
+score_RSF = np.array(score_RSF)
+print(score_RSF,len(models_RSF))
+best_rsf_index = np.argmin(score_RSF,axis=0)
+print(params[best_rsf_index [0]])
+print(params[best_rsf_index [1]])
+print(params[best_rsf_index [2]])
+print(best_rsf_index,'index')
+
+best_model_rsf = select_models(best_rsf_index,models_RSF)
+out_risk_RSF = predict_risk_multi(best_model_rsf,x_test, times)
+out_survival_RSF = 1-out_risk_RSF
+print('RSF')
+eval_train_test(best_model_rsf,x_train,x_val,outcomes_train,outcomes_val,times)
+print('Test Evaluation')
+fpr_rsf, tpr_rsf,roc_auc_rsf = evaluate(out_survival_RSF,out_risk_RSF,outcomes_train, outcomes_test,times)
+
+for i in range(3):
+    plt.plot(fpr_dsm[i],tpr_dsm[i],label="DSM, AUC="+str(roc_auc_dsm[i]))
+    plt.plot(fpr_dcm[i],tpr_dcm[i],label="DCM, AUC="+str(roc_auc_dcm[i]))
+    plt.plot(fpr_cph[i],tpr_cph[i], label="CPH, AUC="+str(roc_auc_cph[i]))
+    plt.plot(fpr_rsf[i],tpr_rsf[i],label="RSF, AUC="+str(roc_auc_rsf[i]))
+
+    plt.legend()
+    if i == 0:
+        year = "1 year"
+    if i == 1:
+        year = "2 year"
+    if i == 2:
+        year = "5 year"
+    plt.title(dataset.study_name+year)
+    plt.show()
